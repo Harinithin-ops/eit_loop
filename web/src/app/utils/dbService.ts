@@ -170,6 +170,49 @@ export const saveLocalFollowRequests = (requests: LocalFollowRequest[]) => {
   } catch {}
 };
 
+// ===================== LOCALLY PROCESSED REQUEST IDS =====================
+// Tracks request IDs that have been accepted/rejected locally.
+// This prevents the 5-second polling from bringing back already-processed
+// requests when the Supabase update fails (e.g. in static export / Capacitor APK
+// where API routes are unavailable and RLS blocks direct updates).
+
+interface ProcessedRequest {
+  id: string;
+  senderId: string;
+  receiverId: string;
+  action: "accepted" | "rejected";
+  timestamp: number;
+}
+
+const getProcessedRequests = (): ProcessedRequest[] => {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(localStorage.getItem("loop_processed_requests") || "[]");
+  } catch { return []; }
+};
+
+const markRequestProcessed = (id: string, senderId: string, receiverId: string, action: "accepted" | "rejected") => {
+  if (typeof window === "undefined") return;
+  const processed = getProcessedRequests();
+  // Remove old entry if exists
+  const filtered = processed.filter(p => p.id !== id);
+  filtered.push({ id, senderId, receiverId, action, timestamp: Date.now() });
+  // Keep max 200 entries, prune entries older than 30 days
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const pruned = filtered.filter(p => p.timestamp > cutoff).slice(-200);
+  localStorage.setItem("loop_processed_requests", JSON.stringify(pruned));
+};
+
+const getProcessedRequestIds = (): Set<string> => {
+  return new Set(getProcessedRequests().map(p => p.id));
+};
+
+const getLocallyAcceptedConnections = (): Array<{senderId: string, receiverId: string}> => {
+  return getProcessedRequests()
+    .filter(p => p.action === "accepted")
+    .map(p => ({ senderId: p.senderId, receiverId: p.receiverId }));
+};
+
 export const getLocalMessages = (): LocalMessage[] => {
   if (typeof window === "undefined") return [];
   try {
@@ -1343,51 +1386,118 @@ export const dbService = {
   },
 
   async acceptFollowRequest(requestId: string): Promise<boolean> {
-    // 1. Find the request first to see who sent it
-    const localReqs = getLocalFollowRequests();
-    const req = localReqs.find(r => r.id === requestId);
-    let updated = localReqs.map(r => r.id === requestId ? { ...r, status: "accepted" as const } : r);
+    const user = await this.getActiveUser();
 
-    if (req) {
-      // Also add the reverse request to local storage so both are accepted locally (mutual follow)
-      const reverseExists = updated.some(r => r.senderId === req.receiverId && r.receiverId === req.senderId);
-      if (!reverseExists) {
-        updated.push({
-          id: "local-req-rev-" + Math.random().toString(36).substring(2, 9),
-          senderId: req.receiverId,
-          receiverId: req.senderId,
-          status: "accepted",
-          createdAt: new Date().toISOString()
-        });
-      } else {
-        updated = updated.map(r => 
-          (r.senderId === req.receiverId && r.receiverId === req.senderId)
-            ? { ...r, status: "accepted" as const }
-            : r
-        );
+    // 1. Determine senderId and receiverId for the request
+    let senderId = "";
+    let receiverId = user?.id || "";
+
+    // Try Supabase first to get the real sender/receiver
+    try {
+      const { data } = await supabase
+        .from("follow_requests")
+        .select("senderId, receiverId")
+        .eq("id", requestId)
+        .maybeSingle();
+      if (data) {
+        senderId = data.senderId;
+        receiverId = data.receiverId;
       }
+    } catch {}
+
+    // Fallback: check local storage
+    if (!senderId) {
+      const localReqs = getLocalFollowRequests();
+      const localReq = localReqs.find(r => r.id === requestId);
+      if (localReq) {
+        senderId = localReq.senderId;
+        receiverId = localReq.receiverId;
+      }
+    }
+
+    // 2. Mark as processed locally (prevents polls from bringing it back)
+    markRequestProcessed(requestId, senderId, receiverId, "accepted");
+
+    // 3. Update local follow requests cache
+    const localReqs = getLocalFollowRequests();
+    // Remove old entries for this pair and add fresh accepted ones
+    let updated = localReqs.filter(r => r.id !== requestId);
+    updated.push({
+      id: requestId,
+      senderId,
+      receiverId,
+      status: "accepted",
+      createdAt: new Date().toISOString()
+    });
+    // Also ensure reverse request exists as accepted (mutual follow)
+    const reverseExists = updated.some(r => r.senderId === receiverId && r.receiverId === senderId);
+    if (!reverseExists) {
+      updated.push({
+        id: "local-req-rev-" + Math.random().toString(36).substring(2, 9),
+        senderId: receiverId,
+        receiverId: senderId,
+        status: "accepted",
+        createdAt: new Date().toISOString()
+      });
+    } else {
+      updated = updated.map(r =>
+        (r.senderId === receiverId && r.receiverId === senderId)
+          ? { ...r, status: "accepted" as const }
+          : r
+      );
     }
     saveLocalFollowRequests(updated);
 
-    // 2. Use API route (bypasses RLS)
+    // 4. Try direct Supabase update first (works if RLS allows)
+    try {
+      const { error } = await supabase
+        .from("follow_requests")
+        .update({ status: "accepted" })
+        .eq("id", requestId);
+      if (!error) {
+        // Also create/update the reverse follow
+        const { data: existingReverse } = await supabase
+          .from("follow_requests")
+          .select("id")
+          .eq("senderId", receiverId)
+          .eq("receiverId", senderId)
+          .maybeSingle();
+
+        if (existingReverse) {
+          await supabase.from("follow_requests").update({ status: "accepted" }).eq("id", existingReverse.id);
+        } else {
+          await supabase.from("follow_requests").insert({
+            senderId: receiverId,
+            receiverId: senderId,
+            status: "accepted"
+          });
+        }
+        console.log("Follow request accepted via direct Supabase");
+        return true;
+      }
+    } catch (e) {
+      console.warn("Direct Supabase accept failed:", e);
+    }
+
+    // 5. Try API route as fallback (works when running with server)
     try {
       const res = await fetch("/api/follow", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "accept", requestId }),
       });
-      if (!res.ok) {
-        const json = await res.json();
-        console.error("API accept follow request failed:", json.error);
+      if (res.ok) {
+        console.log("Follow request accepted via API route");
+        return true;
       }
+      const json = await res.json().catch(() => ({}));
+      console.error("API accept follow request failed:", json.error);
     } catch (e) {
-      console.error("API accept follow request exception:", e);
-      // Fallback to direct Supabase
-      try {
-        await supabase.from("follow_requests").update({ status: "accepted" }).eq("id", requestId);
-      } catch {}
+      console.warn("API route unavailable (expected in Capacitor):", e);
     }
 
+    // Even if both Supabase and API failed, the local state is updated
+    // so the UI will work correctly on this device
     return true;
   },
 
@@ -1518,9 +1628,14 @@ export const dbService = {
       }
     });
 
-    const combined = Array.from(requestsMap.values());
+    const combinedRaw = Array.from(requestsMap.values());
 
-    // 3. Pre-batch missing profiles for the combined requests in ONE database query
+    // 3. Filter out requests that have been locally accepted/rejected
+    // (prevents the poll loop in Capacitor when Supabase update fails)
+    const processedIds = getProcessedRequestIds();
+    const combined = combinedRaw.filter((r: any) => !processedIds.has(r.id));
+
+    // 4. Pre-batch missing profiles for the combined requests in ONE database query
     const senderIds = Array.from(new Set(combined.map((r: any) => r.senderId)));
     const missingIds = senderIds.filter((id) => !profileCache.has(id));
     if (missingIds.length > 0) {
@@ -1776,24 +1891,44 @@ export const dbService = {
     const chats: RealChat[] = await Promise.all(
       profiles.map(async (profile: any) => {
         let dbMessages: any[] = [];
+        let fetchedDirectly = false;
+        // Try direct Supabase query first (works on Capacitor/APK if RLS permits select(true))
         try {
-          const res = await fetch("/api/messages", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              action: "get",
-              userId: user.id,
-              otherId: profile.id
-            })
-          });
-          if (res.ok) {
-            const resultData = await res.json();
-            if (resultData.messages) dbMessages = resultData.messages;
-          } else {
-            console.warn("fetch messages API returned error:", res.status);
+          const { data, error } = await supabase
+            .from("messages")
+            .select("*")
+            .or(`and(senderId.eq.${user.id},receiverId.eq.${profile.id}),and(senderId.eq.${profile.id},receiverId.eq.${user.id})`)
+            .order("createdAt", { ascending: true });
+          if (!error && data) {
+            dbMessages = data;
+            fetchedDirectly = true;
+          } else if (error) {
+            console.warn("Direct Supabase messages fetch error:", error.message);
           }
         } catch (e) {
-          console.warn("fetch messages API failed:", e);
+          console.warn("Direct Supabase messages fetch exception:", e);
+        }
+
+        if (!fetchedDirectly) {
+          try {
+            const res = await fetch("/api/messages", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "get",
+                userId: user.id,
+                otherId: profile.id
+              })
+            });
+            if (res.ok) {
+              const resultData = await res.json();
+              if (resultData.messages) dbMessages = resultData.messages;
+            } else {
+              console.warn("fetch messages API returned error:", res.status);
+            }
+          } catch (e) {
+            console.warn("fetch messages API failed:", e);
+          }
         }
 
         const localMsgs = getLocalMessages().filter(m => 
@@ -1938,28 +2073,52 @@ export const dbService = {
 
     // PRIORITY 1: Write to Supabase first so the other user (on any device) can see it immediately
     let savedId: string | null = null;
+    
+    // Try direct Supabase insert first (works on Capacitor/APK if RLS permits insert(true))
     try {
-      const res = await fetch("/api/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "send",
+      const { data, error } = await supabase
+        .from("messages")
+        .insert({
           senderId: user.id,
           receiverId: receiverId,
           content: text
         })
-      });
-      if (res.ok) {
-        const resultData = await res.json();
-        if (resultData.data?.id) {
-          savedId = resultData.data.id;
-        }
-      } else {
-        const errText = await res.text();
-        console.warn("fetch send message API returned error:", res.status, errText);
+        .select()
+        .single();
+      if (!error && data) {
+        savedId = data.id;
+        console.log("Message sent via direct Supabase insert");
+      } else if (error) {
+        console.warn("Direct Supabase message insert error:", error.message);
       }
     } catch (e) {
-      console.warn("Supabase sendMessage exception:", e);
+      console.warn("Direct Supabase message insert exception:", e);
+    }
+
+    if (!savedId) {
+      try {
+        const res = await fetch("/api/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "send",
+            senderId: user.id,
+            receiverId: receiverId,
+            content: text
+          })
+        });
+        if (res.ok) {
+          const resultData = await res.json();
+          if (resultData.data?.id) {
+            savedId = resultData.data.id;
+          }
+        } else {
+          const errText = await res.text();
+          console.warn("fetch send message API returned error:", res.status, errText);
+        }
+      } catch (e) {
+        console.warn("Supabase sendMessage API exception:", e);
+      }
     }
 
     // PRIORITY 2: Save to localStorage as optimistic UI cache (same-device only)
@@ -2001,6 +2160,17 @@ export const dbService = {
       return m;
     });
     saveLocalMessages(updated);
+
+    // Try direct Supabase update (works on Capacitor/APK if RLS permits update(true))
+    try {
+      await supabase
+        .from("messages")
+        .update({ isRead: true })
+        .eq("senderId", chatUserId)
+        .eq("receiverId", user.id);
+    } catch (e) {
+      console.warn("Direct Supabase markMessagesAsRead failed:", e);
+    }
   },
 
   async getTotalUnreadCount(): Promise<number> {
