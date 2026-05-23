@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { dbService, RealPost, RealReel, RealUser, FollowRequest, uploadFileToStorage } from "@/app/utils/dbService";
 import Link from "next/link";
 import PostDetailModal from "@/components/PostDetailModal";
@@ -8,6 +9,7 @@ import { supabase } from "@/app/utils/supabase";
 import { useTheme } from "@/app/utils/ThemeProvider";
 
 export default function CreatorProfile() {
+  const router = useRouter();
   const [currentUser, setCurrentUser] = useState<RealUser | null>(null);
   const [activeTab, setActiveTab] = useState<"posts" | "reels" | "saved">("posts");
 
@@ -26,7 +28,7 @@ export default function CreatorProfile() {
     try {
       supabase.auth.signOut().catch(() => {});
     } catch {}
-    window.location.href = "/login";
+    router.push("/login");
   };
   const [followerCount, setFollowerCount] = useState(0);
   const [followingCount, setFollowingCount] = useState(0);
@@ -181,9 +183,9 @@ export default function CreatorProfile() {
             <div className="mt-4 space-y-3 border-t border-black/5 pt-4">
               {incomingRequests.map(req => (
                 <div key={req.id} className="flex items-center gap-3">
-                  <Link href={`/user/${req.senderUsername}`}><img src={req.senderAvatar} alt="" className="w-10 h-10 rounded-full object-cover border border-black/5" /></Link>
+                  <Link href={`/user?username=${req.senderUsername}`}><img src={req.senderAvatar} alt="" className="w-10 h-10 rounded-full object-cover border border-black/5" /></Link>
                   <div className="flex-1 min-w-0">
-                    <Link href={`/user/${req.senderUsername}`} className="font-bold text-sm text-on-surface truncate block hover:text-primary">{req.senderName}</Link>
+                    <Link href={`/user?username=${req.senderUsername}`} className="font-bold text-sm text-on-surface truncate block hover:text-primary">{req.senderName}</Link>
                     <p className="text-xs text-primary font-semibold">@{req.senderUsername}</p>
                   </div>
                   <button onClick={() => handleAccept(req.id)} className="px-3 py-1.5 bg-primary text-white rounded-full text-xs font-bold active:scale-95 transition-all">Accept</button>

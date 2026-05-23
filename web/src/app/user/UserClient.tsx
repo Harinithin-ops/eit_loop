@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import {
   dbService,
   RealPost,
@@ -15,9 +15,9 @@ import Link from "next/link";
 import PostDetailModal from "@/components/PostDetailModal";
 
 export default function PublicUserProfile() {
-  const params = useParams();
+  const searchParams = useSearchParams();
   const router = useRouter();
-  const username = params.username as string;
+  const username = searchParams.get("username") as string;
 
   const [currentUser, setCurrentUser] = useState<RealUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -77,7 +77,9 @@ export default function PublicUserProfile() {
   };
 
   useEffect(() => {
-    loadProfile();
+    if (username) {
+      loadProfile();
+    }
   }, [username]);
 
   // Story progress timer
@@ -175,7 +177,7 @@ export default function PublicUserProfile() {
             User Not Found
           </h2>
           <p className="text-sm text-on-surface-variant leading-relaxed">
-            No user with username <strong>@{username}</strong> exists on Loop.
+            No user with username <strong>@{username || "unknown"}</strong> exists on Loop.
           </p>
           <Link
             href="/explore"

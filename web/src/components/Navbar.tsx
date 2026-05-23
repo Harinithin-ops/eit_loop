@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { supabase } from "@/app/utils/supabase";
 import { dbService, uploadFileToStorage, RealNotification } from "@/app/utils/dbService";
 import { useTheme } from "@/app/utils/ThemeProvider";
@@ -73,6 +73,7 @@ const renderMobileIcon = (name: string, isActive: boolean) => {
 
 export default function Navbar({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [hideNav, setHideNav] = useState(false);
   const [lastScrollTop, setLastScrollTop] = useState(0);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -239,7 +240,7 @@ export default function Navbar({ children }: { children: React.ReactNode }) {
     try {
       supabase.auth.signOut().catch(() => {});
     } catch {}
-    window.location.href = "/login";
+    router.push("/login");
   };
 
   // File handling
@@ -508,14 +509,14 @@ export default function Navbar({ children }: { children: React.ReactNode }) {
                 notifications.map((n) => (
                   <div key={n.id} className="flex gap-3 items-start text-sm border-b border-[#1a1a1a] pb-3 last:border-0">
                     {/* User Avatar */}
-                    <Link href={`/user/${n.senderUsername}`} onClick={() => setShowNotifications(false)} className="flex-shrink-0">
+                    <Link href={`/user?username=${n.senderUsername}`} onClick={() => setShowNotifications(false)} className="flex-shrink-0">
                       <img src={n.senderAvatar || "/images/avatar_marcus_1779191788520.png"} alt="" className="w-10 h-10 rounded-full object-cover border border-[#262626]" />
                     </Link>
 
                     {/* Content */}
                     <div className="flex-1 min-w-0">
                       <p className="text-white text-xs leading-normal">
-                        <Link href={`/user/${n.senderUsername}`} onClick={() => setShowNotifications(false)} className="font-bold hover:text-primary transition-colors mr-1">
+                        <Link href={`/user?username=${n.senderUsername}`} onClick={() => setShowNotifications(false)} className="font-bold hover:text-primary transition-colors mr-1">
                           @{n.senderUsername || n.senderName}
                         </Link>
                         {n.type === "follow_request" && "sent you a follow request."}
