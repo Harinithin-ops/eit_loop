@@ -301,7 +301,7 @@ const getProfile = async (userId: string) => {
   let dbProfile = null;
   if (isValidUUID(userId)) {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from("profiles")
         .select("*")
         .eq("id", userId)
@@ -365,14 +365,14 @@ export const dbService = {
   async ensureProfileExists(user: RealUser): Promise<void> {
     if (profilesEnsured.has(user.id)) return;
     try {
-      const { data: existing } = await supabase
+      const { data: existing } = await supabaseAdmin
         .from("profiles")
         .select("id")
         .eq("id", user.id)
         .maybeSingle();
 
       if (!existing) {
-        await supabase.from("profiles").insert({
+        await supabaseAdmin.from("profiles").insert({
           id: user.id,
           full_name: user.fullName,
           username: user.username,
@@ -452,7 +452,7 @@ export const dbService = {
   async getAllProfiles() {
     let list: any[] = [];
     try {
-      const { data } = await supabase.from("profiles").select("*");
+      const { data } = await supabaseAdmin.from("profiles").select("*");
       if (data) list = data;
     } catch (e) {
       console.warn("Supabase getAllProfiles failed:", e);
@@ -465,14 +465,14 @@ export const dbService = {
     let profileData = null;
     try {
       if (isValidUUID(username)) {
-        const { data } = await supabase
+        const { data } = await supabaseAdmin
           .from("profiles")
           .select("*")
           .eq("id", username)
           .single();
         profileData = data;
       } else {
-        const { data } = await supabase
+        const { data } = await supabaseAdmin
           .from("profiles")
           .select("*")
           .ilike("username", username)
@@ -493,7 +493,7 @@ export const dbService = {
     let postCount = 0;
     if (isValidUUID(profileData.id)) {
       try {
-        const { count } = await supabase
+        const { count } = await supabaseAdmin
           .from("posts")
           .select("*", { count: "exact", head: true })
           .eq("authorId", profileData.id);
@@ -519,7 +519,7 @@ export const dbService = {
     let profileData = null;
     if (isValidUUID(userId)) {
       try {
-        const { data } = await supabase
+        const { data } = await supabaseAdmin
           .from("profiles")
           .select("*")
           .eq("id", userId)
@@ -540,7 +540,7 @@ export const dbService = {
     let postCount = 0;
     if (isValidUUID(profileData.id)) {
       try {
-        const { count } = await supabase
+        const { count } = await supabaseAdmin
           .from("posts")
           .select("*", { count: "exact", head: true })
           .eq("authorId", profileData.id);
@@ -567,7 +567,7 @@ export const dbService = {
     username: string,
     excludeUserId?: string
   ): Promise<boolean> {
-    let query = supabase
+    let query = supabaseAdmin
       .from("profiles")
       .select("id")
       .eq("username", username);
@@ -1450,13 +1450,13 @@ export const dbService = {
 
     // 4. Try direct Supabase update first (works if RLS allows)
     try {
-      const { error } = await supabase
+      const { error } = await supabaseAdmin
         .from("follow_requests")
         .update({ status: "accepted" })
         .eq("id", requestId);
       if (!error) {
         // Also create/update the reverse follow
-        const { data: existingReverse } = await supabase
+        const { data: existingReverse } = await supabaseAdmin
           .from("follow_requests")
           .select("id")
           .eq("senderId", receiverId)
@@ -1464,9 +1464,9 @@ export const dbService = {
           .maybeSingle();
 
         if (existingReverse) {
-          await supabase.from("follow_requests").update({ status: "accepted" }).eq("id", existingReverse.id);
+          await supabaseAdmin.from("follow_requests").update({ status: "accepted" }).eq("id", existingReverse.id);
         } else {
-          await supabase.from("follow_requests").insert({
+          await supabaseAdmin.from("follow_requests").insert({
             senderId: receiverId,
             receiverId: senderId,
             status: "accepted"
@@ -1522,7 +1522,7 @@ export const dbService = {
       console.error("API reject follow request exception:", e);
       // Fallback to direct Supabase
       try {
-        await supabase.from("follow_requests").update({ status: "rejected" }).eq("id", requestId);
+        await supabaseAdmin.from("follow_requests").update({ status: "rejected" }).eq("id", requestId);
       } catch {}
     }
 
@@ -1543,14 +1543,14 @@ export const dbService = {
 
     // 2. Try Supabase delete
     try {
-      await supabase
+      await supabaseAdmin
         .from("follow_requests")
         .delete()
         .eq("senderId", user.id)
         .eq("receiverId", targetUserId)
         .eq("status", "accepted");
 
-      await supabase
+      await supabaseAdmin
         .from("follow_requests")
         .delete()
         .eq("senderId", targetUserId)
@@ -1572,7 +1572,7 @@ export const dbService = {
     // 1. Query Supabase directly (preferred for speed & efficiency - uses direct RLS check)
     let fetchedDirectly = false;
     try {
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from("follow_requests")
         .select("*")
         .eq("receiverId", user.id)
@@ -1640,7 +1640,7 @@ export const dbService = {
     const missingIds = senderIds.filter((id) => !profileCache.has(id));
     if (missingIds.length > 0) {
       try {
-        const { data: dbProfiles } = await supabase
+        const { data: dbProfiles } = await supabaseAdmin
           .from("profiles")
           .select("*")
           .in("id", missingIds);
@@ -1686,7 +1686,7 @@ export const dbService = {
     }
     let count = 0;
     try {
-      const { count: dbCount } = await supabase
+      const { count: dbCount } = await supabaseAdmin
         .from("follow_requests")
         .select("*", { count: "exact", head: true })
         .eq("receiverId", userId)
@@ -1710,7 +1710,7 @@ export const dbService = {
     }
     let count = 0;
     try {
-      const { count: dbCount } = await supabase
+      const { count: dbCount } = await supabaseAdmin
         .from("follow_requests")
         .select("*", { count: "exact", head: true })
         .eq("senderId", userId)
@@ -1735,13 +1735,13 @@ export const dbService = {
     // Only query Supabase if userId is a valid UUID
     if (isValidUUID(userId)) {
       try {
-        const { data: sent } = await supabase
+        const { data: sent } = await supabaseAdmin
           .from("follow_requests")
           .select("id, receiverId, createdAt")
           .eq("senderId", userId)
           .eq("status", "accepted");
 
-        const { data: received } = await supabase
+        const { data: received } = await supabaseAdmin
           .from("follow_requests")
           .select("id, senderId, createdAt")
           .eq("receiverId", userId)
@@ -1828,7 +1828,7 @@ export const dbService = {
     if (localIsFollowing) return true;
 
     try {
-      const { data } = await supabase
+      const { data } = await supabaseAdmin
         .from("follow_requests")
         .select("id")
         .or(
@@ -1859,7 +1859,7 @@ export const dbService = {
 
     let dbProfiles: any[] = [];
     try {
-      const { data } = await supabase
+      const { data } = await supabaseAdmin
         .from("profiles")
         .select("*")
         .in("id", connectedIds);
@@ -2002,7 +2002,7 @@ export const dbService = {
 
     let dbProfiles: any[] = [];
     try {
-      const { data } = await supabase
+      const { data } = await supabaseAdmin
         .from("profiles")
         .select("*")
         .in("id", senderIds);
@@ -2156,7 +2156,7 @@ export const dbService = {
     }));
 
     try {
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from("notifications")
         .select("*")
         .eq("receiver_id", user.id)
@@ -2170,7 +2170,7 @@ export const dbService = {
       const missingIds = senderIds.filter((id) => !profileCache.has(id));
       if (missingIds.length > 0) {
         try {
-          const { data: dbProfiles } = await supabase
+          const { data: dbProfiles } = await supabaseAdmin
             .from("profiles")
             .select("*")
             .in("id", missingIds);
@@ -2271,7 +2271,7 @@ export const dbService = {
     if (!user || user.id === receiverId) return false;
 
     try {
-      const { error } = await supabase.from("notifications").insert({
+      const { error } = await supabaseAdmin.from("notifications").insert({
         receiver_id: receiverId,
         sender_id: user.id,
         type,
@@ -2291,7 +2291,7 @@ export const dbService = {
     if (!user) return;
 
     try {
-      await supabase
+      await supabaseAdmin
         .from("notifications")
         .update({ is_read: true })
         .eq("receiver_id", user.id)
@@ -2303,7 +2303,7 @@ export const dbService = {
 
   async deleteNotification(id: string): Promise<boolean> {
     try {
-      const { error } = await supabase
+      const { error } = await supabaseAdmin
         .from("notifications")
         .delete()
         .eq("id", id);

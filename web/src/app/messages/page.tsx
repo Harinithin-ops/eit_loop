@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { dbService, RealChat, RealUser, FollowRequest } from "@/app/utils/dbService";
-import { supabase } from "@/app/utils/supabase";
+import { supabase, supabaseAdmin } from "@/app/utils/supabase";
 import Link from "next/link";
 
 export default function Messages() {
@@ -65,7 +65,8 @@ export default function Messages() {
     const setupSubscription = async () => {
       const user = await dbService.getActiveUser();
       if (!user) return;
-      channel = supabase
+      const client = supabaseAdmin || supabase;
+      channel = client
         .channel(`messages_room_${user.id}`)
         .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, loadChats)
         .on("postgres_changes", { event: "*", schema: "public", table: "follow_requests" }, loadChats)
@@ -77,7 +78,10 @@ export default function Messages() {
     window.addEventListener("new_message", loadChats);
     window.addEventListener("loop_follow_sync", loadChats);
     return () => {
-      if (channel) supabase.removeChannel(channel);
+      if (channel) {
+        const client = supabaseAdmin || supabase;
+        client.removeChannel(channel);
+      }
       clearInterval(interval);
       window.removeEventListener("new_message", loadChats);
       window.removeEventListener("loop_follow_sync", loadChats);
